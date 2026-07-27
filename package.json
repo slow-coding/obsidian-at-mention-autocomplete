@@ -1,0 +1,15 @@
+{
+  "name": "at-mention-autocomplete",
+  "version": "1.0.0",
+  "description": "Auto-complete notes with @ mention",
+  "main": "main.js",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.0",
+    "typescript": "^5.5.0"
+  }
+}
