@@ -1,0 +1,15 @@
+/* @ Mention Autocomplete — popup styling */
+
+.at-mention-popup {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.at-mention-popup::-webkit-scrollbar {
+  width: 6px;
+}
+
+.at-mention-popup::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-bg);
+  border-radius: 3px;
+}
