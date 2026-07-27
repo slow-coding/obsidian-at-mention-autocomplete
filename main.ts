@@ -98,7 +98,10 @@ class Popup {
   show(view: EditorView, from: number, query: string) {
     this.view = view; this.from = from; this._lastQuery = query;
     this.results = this.index.search(query, 20); this.sel = 0;
-    if (!this.results.length) { this.hide(); return; }
+    if (!this.results.length) {
+      // Don't hide — show empty state so popup stays, user can backspace
+      this.results = []; this.sel = 0;
+    }
     const coords = view.coordsAtPos(from);
     if (!coords) { this.hide(); return; }
     this.el.style.left = Math.min(Math.max(0, coords.left), window.innerWidth - 650) + "px";
@@ -159,6 +162,13 @@ class Popup {
   private render() {
     this.el.innerHTML = "";
     this.items = [];
+    if (!this.results.length) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "padding:12px 16px;color:var(--text-muted);font-size:13px;";
+      empty.textContent = "No matching notes";
+      this.el.appendChild(empty);
+      return;
+    }
     for (let i = 0; i < this.results.length; i++) {
       const r = this.results[i];
       const item = document.createElement("div");

@@ -145,8 +145,8 @@ var Popup = class {
     this.results = this.index.search(query, 20);
     this.sel = 0;
     if (!this.results.length) {
-      this.hide();
-      return;
+      this.results = [];
+      this.sel = 0;
     }
     const coords = view.coordsAtPos(from);
     if (!coords) {
@@ -211,6 +211,13 @@ var Popup = class {
   render() {
     this.el.innerHTML = "";
     this.items = [];
+    if (!this.results.length) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "padding:12px 16px;color:var(--text-muted);font-size:13px;";
+      empty.textContent = "No matching notes";
+      this.el.appendChild(empty);
+      return;
+    }
     for (let i = 0; i < this.results.length; i++) {
       const r = this.results[i];
       const item = document.createElement("div");
