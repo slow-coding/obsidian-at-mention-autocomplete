@@ -84,17 +84,21 @@ var SearchIndex = class {
     return this.cleanMD(r).replace(/\n+/g, " \xB7 ").replace(/\s{2,}/g, " ").replace(/^[。！？.!?；;，,、\s\-–—]+/, "").replace(/[。！？.!?；;，,、\s\-–—]+$/, "").replace(/\s-\s/g, " ").replace(/\s-$/, "").trim() || "(empty)";
   }
   sentence(content, start, len) {
-    let left = Math.max(0, start - 40);
-    let right = Math.min(content.length, start + len + 40);
+    const TERM = /[。！？]|[.!?](?=\s|$)|\n/g;
+    let left = Math.max(0, start - 120);
+    let right = Math.min(content.length, start + len + 120);
     {
+      let m;
+      let lastIdx = -1;
       const slice = content.slice(left, start);
-      const m = slice.match(/[。！？.!?\n]/g);
-      if (m) left = left + slice.lastIndexOf(m[m.length - 1]) + 1;
+      TERM.lastIndex = 0;
+      while ((m = TERM.exec(slice)) !== null) lastIdx = m.index + m[0].length;
+      if (lastIdx >= 0) left = left + lastIdx;
     }
     {
       const slice = content.slice(start + len, right);
-      const m = slice.match(/[。！？.!?\n]/);
-      if (m) right = start + len + (m.index ?? 0);
+      const idx = slice.search(TERM);
+      if (idx >= 0) right = start + len + idx;
     }
     let r = content.slice(left, right).trim();
     const h = this.findHeading(content, start);
@@ -103,7 +107,7 @@ var SearchIndex = class {
     if (r.length < 4) r = content.slice(start, start + len + 30).trim();
     r = this.cleanMD(r);
     r = r.replace(/^[。！？.!?；;，,、\s\-–—]+/, "").replace(/[。！？.!?；;，,、\s\-–—]+$/, "");
-    return r.length > 80 ? r.slice(0, 77) + "\u2026" : r || null;
+    return r.length > 100 ? r.slice(0, 97) + "\u2026" : r || null;
   }
   /** Find the nearest heading above a position. Returns null if none within ~30 lines. */
   findHeading(content, pos) {

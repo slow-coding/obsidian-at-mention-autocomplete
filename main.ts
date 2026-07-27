@@ -28,19 +28,24 @@ class SearchIndex {
   private cleanMD(r: string): string { return r.replace(/!\[\[[^\]]*\]\]/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_~`]+/g, "").replace(/->/g, " ").replace(/>\s?/g, "").replace(/^\s*[-*+]\s+/g, "").replace(/^\s*\d+\.\s+/g, "").replace(/\|/g, "/").trim(); }
   win(content: string, start: number, len: number, w: number): string { const s = Math.max(0, start - w), e = Math.min(content.length, start + len + w); let r = content.slice(s, e); if (s > 0) r = "…" + r; if (e < content.length) r = r + "…"; return this.cleanMD(r).replace(/\n+/g, " · ").replace(/\s{2,}/g, " ").replace(/^[。！？.!?；;，,、\s\-–—]+/, "").replace(/[。！？.!?；;，,、\s\-–—]+$/, "").replace(/\s-\s/g, " ").replace(/\s-$/, "").trim() || "(empty)"; }
   private sentence(content: string, start: number, len: number): string | null {
-    // Sentence terminators only (。！？.!? and newline), not comma/semicolon
-    // Search left/right for nearest terminator, but cap at ~40 chars each way
-    let left = Math.max(0, start - 40);
-    let right = Math.min(content.length, start + len + 40);
+    // Terminators: Chinese 。！？ / English .!? followed by space or end / newline
+    const TERM = /[。！？]|[.!?](?=\s|$)|\n/g;
+    let left = Math.max(0, start - 120);
+    let right = Math.min(content.length, start + len + 120);
+    // Search left for last terminator
     {
+      let m: RegExpExecArray | null;
+      let lastIdx = -1;
       const slice = content.slice(left, start);
-      const m = slice.match(/[。！？.!?\n]/g);
-      if (m) left = left + slice.lastIndexOf(m[m.length - 1]) + 1;
+      TERM.lastIndex = 0;
+      while ((m = TERM.exec(slice)) !== null) lastIdx = m.index + m[0].length;
+      if (lastIdx >= 0) left = left + lastIdx;
     }
+    // Search right for first terminator
     {
       const slice = content.slice(start + len, right);
-      const m = slice.match(/[。！？.!?\n]/);
-      if (m) right = start + len + (m.index ?? 0);
+      const idx = slice.search(TERM);
+      if (idx >= 0) right = start + len + idx;
     }
     let r = content.slice(left, right).trim();
     // Prepend heading context if match is under a heading
@@ -52,7 +57,7 @@ class SearchIndex {
     r = this.cleanMD(r);
     // Final trim: remove trailing/leading punctuation, dashes, whitespace
     r = r.replace(/^[。！？.!?；;，,、\s\-–—]+/, "").replace(/[。！？.!?；;，,、\s\-–—]+$/, "");
-    return r.length > 80 ? r.slice(0, 77) + "…" : (r || null);
+    return r.length > 100 ? r.slice(0, 97) + "…" : (r || null);
   }
 
   /** Find the nearest heading above a position. Returns null if none within ~30 lines. */
