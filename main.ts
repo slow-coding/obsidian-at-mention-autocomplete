@@ -19,8 +19,8 @@ class SearchIndex {
   private match(e: SearchEntry, q: string): SearchResult & { s: number } {
     const lt = e.title.toLowerCase(), body = this.stripFM(e.content), lb = body.toLowerCase(), ti = lt.indexOf(q), bi = lb.indexOf(q);
     let s = 0;
-    if (lt === q) s = 1000; else if (ti === 0) s = 500 + (100 - Math.min(q.length, 100)); else if (ti > 0) s = 300 - Math.min(ti, 100);
-    if (bi !== -1) s += 100 - Math.min(bi / 10, 50);
+    if (lt === q) s = 2000; else if (ti === 0) s = 800 + (100 - Math.min(q.length, 100)); else if (ti > 0) s = 500 - Math.min(ti, 100);
+    if (bi !== -1) s += Math.max(0, 20 - Math.min(bi / 50, 20));
     const snippet = bi >= 0 ? this.win(body, bi, q.length, 15) : e.title;
     const matchSentence = bi >= 0 ? this.sentence(body, bi, q.length) : null;
     return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence };
@@ -155,15 +155,11 @@ class Popup {
     const heading = hasHeading ? alias!.slice(0, headingSep) : null;
     const sentence = hasHeading ? alias!.slice(headingSep + 3) : alias;
     const target = heading ? `${title}#${heading}` : title;
-    // Title-only hit (no body match): skip alias, just [[title]]
-    const insert = sentence ? `[[${target}|${sentence}]]` : `[[${target}]]`;
+    const insert = `[[${target}|${sentence || title}]]`;
     const pos = this.view.state.selection.main.head;
-    if (sentence) {
-      const newEnd = this.from + insert.length;
-      this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - sentence.length - 2, head: newEnd - 2 } });
-    } else {
-      this.view.dispatch({ changes: { from: this.from, to: pos, insert } });
-    }
+    const selText = sentence || title;
+    const newEnd = this.from + insert.length;
+    this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - selText.length - 2, head: newEnd - 2 } });
     this.hide(); this.view.focus();
   }
 

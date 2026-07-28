@@ -65,10 +65,10 @@ var SearchIndex = class {
   match(e, q) {
     const lt = e.title.toLowerCase(), body = this.stripFM(e.content), lb = body.toLowerCase(), ti = lt.indexOf(q), bi = lb.indexOf(q);
     let s = 0;
-    if (lt === q) s = 1e3;
-    else if (ti === 0) s = 500 + (100 - Math.min(q.length, 100));
-    else if (ti > 0) s = 300 - Math.min(ti, 100);
-    if (bi !== -1) s += 100 - Math.min(bi / 10, 50);
+    if (lt === q) s = 2e3;
+    else if (ti === 0) s = 800 + (100 - Math.min(q.length, 100));
+    else if (ti > 0) s = 500 - Math.min(ti, 100);
+    if (bi !== -1) s += Math.max(0, 20 - Math.min(bi / 50, 20));
     const snippet = bi >= 0 ? this.win(body, bi, q.length, 15) : e.title;
     const matchSentence = bi >= 0 ? this.sentence(body, bi, q.length) : null;
     return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence };
@@ -456,3 +456,5 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
     this.popup?.destroy();
   }
 };
+
+/* nosourcemap */
