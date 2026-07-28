@@ -203,14 +203,11 @@ var Popup = class {
     const heading = hasHeading ? alias.slice(0, headingSep) : null;
     const sentence = hasHeading ? alias.slice(headingSep + 3) : alias;
     const target = heading ? `${title}#${heading}` : title;
-    const insert = sentence ? `[[${target}|${sentence}]]` : `[[${target}]]`;
+    const insert = `[[${target}|${sentence || title}]]`;
     const pos = this.view.state.selection.main.head;
-    if (sentence) {
-      const newEnd = this.from + insert.length;
-      this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - sentence.length - 2, head: newEnd - 2 } });
-    } else {
-      this.view.dispatch({ changes: { from: this.from, to: pos, insert } });
-    }
+    const selText = sentence || title;
+    const newEnd = this.from + insert.length;
+    this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - selText.length - 2, head: newEnd - 2 } });
     this.hide();
     this.view.focus();
   }
@@ -456,5 +453,3 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
     this.popup?.destroy();
   }
 };
-
-/* nosourcemap */
