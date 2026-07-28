@@ -1,7 +1,7 @@
 {
   "id": "at-mention-autocomplete",
   "name": "Mention Autocomplete",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "minAppVersion": "1.0.0",
   "description": "Type @ to full-text search and link notes. Rendered preview, smart sentence alias, keyboard-first.",
   "author": "Darren Zheng",
