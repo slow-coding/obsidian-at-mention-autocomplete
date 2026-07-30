@@ -25,7 +25,7 @@ class SearchIndex {
     const matchSentence = bi >= 0 ? this.sentence(body, bi, q.length) : null;
     return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence };
   }
-  private cleanMD(r: string): string { return r.replace(/!\[\[[^\]]*\]\]/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_~`]+/g, "").replace(/->/g, " ").replace(/>\s?/g, "").replace(/^\s*[-*+]\s+/g, "").replace(/^\s*\d+\.\s+/g, "").replace(/\|/g, "/").trim(); }
+  private cleanMD(r: string): string { return r.replace(/!\[\[[^\]]*\]\]/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_~`]+/g, "").replace(/->/g, " ").replace(/>\s?/g, "").replace(/^\s*[-*+]\s+/g, "").replace(/^\s*\d+\.\s+/g, "").replace(/\|/g, "/").replace(/[\[\]]/g, "").trim(); }
   win(content: string, start: number, len: number, w: number): string { const s = Math.max(0, start - w), e = Math.min(content.length, start + len + w); let r = content.slice(s, e); if (s > 0) r = "…" + r; if (e < content.length) r = r + "…"; return this.cleanMD(r).replace(/\n+/g, " · ").replace(/\s{2,}/g, " ").replace(/^[。！？.!?；;，,、\s\-–—]+/, "").replace(/[。！？.!?；;，,、\s\-–—]+$/, "").replace(/\s-\s/g, " ").replace(/\s-$/, "").trim() || "(empty)"; }
   private sentence(content: string, start: number, len: number): string | null {
     // Terminators: Chinese 。！？ / English .!? followed by space or end / newline
