@@ -157,14 +157,24 @@ var Popup = class {
       this.hide();
       return;
     }
-    this.el.style.left = Math.min(Math.max(0, coords.left), window.innerWidth - 650) + "px";
+    const isNarrow = window.innerWidth < 600;
+    const popupMaxW = isNarrow ? Math.min(window.innerWidth - 16, 400) : 640;
+    const popupMinW = isNarrow ? popupMaxW : 380;
+    this.el.style.minWidth = popupMinW + "px";
+    this.el.style.maxWidth = popupMaxW + "px";
+    this.el.style.left = Math.min(
+      Math.max(4, coords.left),
+      Math.max(4, window.innerWidth - popupMaxW - 8)
+    ) + "px";
     const wasHidden = this.el.style.display === "none";
     if (wasHidden) {
       this._positionAbove = coords.bottom + 360 + 8 > window.innerHeight;
     }
-    this.el.style.top = this._positionAbove ? Math.max(0, coords.top - 360 - 8) + "px" : coords.bottom + 4 + "px";
-    const clampTop = window.innerHeight - Math.min(this.el.offsetHeight || 100, 360) - 16;
-    this.el.style.top = Math.min(parseFloat(this.el.style.top), Math.max(0, clampTop)) + "px";
+    const maxH = Math.min(360, window.innerHeight * 0.55);
+    this.el.style.maxHeight = maxH + "px";
+    this.el.style.top = this._positionAbove ? Math.max(4, coords.top - maxH - 8) + "px" : coords.bottom + 4 + "px";
+    const clampTop = window.innerHeight - Math.min(this.el.offsetHeight || 100, maxH) - 16;
+    this.el.style.top = Math.min(parseFloat(this.el.style.top), Math.max(4, clampTop)) + "px";
     this.el.style.display = "block";
     this.render();
     this.showDetail(0);
@@ -301,8 +311,14 @@ var Popup = class {
       }
     }, 150);
     const rect = this.el.getBoundingClientRect();
+    const isNarrow = window.innerWidth < 600;
+    if (isNarrow) {
+      this.detailEl.style.display = "none";
+      return;
+    }
+    const detailW = 550;
     let left = rect.right + 8;
-    if (left + 600 > window.innerWidth) left = Math.max(0, rect.left - 608);
+    if (left + detailW > window.innerWidth) left = Math.max(0, rect.left - detailW - 8);
     this.detailEl.style.left = left + "px";
     this.detailEl.style.top = rect.top + "px";
     this.detailEl.style.height = rect.height + "px";
