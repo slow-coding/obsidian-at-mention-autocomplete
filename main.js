@@ -21,7 +21,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var main_exports = {};
 __export(main_exports, {
   SearchIndex: () => SearchIndex,
-  default: () => AtMentionPlugin
+  default: () => AtMentionPlugin,
+  relTime: () => relTime
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
@@ -55,11 +56,27 @@ var UI_TEXT = {
   title: { en: "Title", zh: "\u6807\u9898" },
   content: { en: "Body", zh: "\u6B63\u6587" }
 };
+function currentLang() {
+  return typeof localStorage !== "undefined" && localStorage.getItem("language") || "en";
+}
 function t(key) {
-  const lang = typeof localStorage !== "undefined" && localStorage.getItem("language") || "en";
   const dict = UI_TEXT[key];
   if (!dict) return key;
-  return lang.toLowerCase().startsWith("zh") ? dict.zh : dict.en;
+  return currentLang().toLowerCase().startsWith("zh") ? dict.zh : dict.en;
+}
+function pad2(n) {
+  return n < 10 ? "0" + n : String(n);
+}
+function relTime(ts) {
+  const zh = currentLang().toLowerCase().startsWith("zh");
+  const d = new Date(ts), now = /* @__PURE__ */ new Date();
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const day = Math.round((dayStart(now) - dayStart(d)) / 864e5);
+  const date = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  if (day <= 0) return zh ? "\u4ECA\u5929" : "Today";
+  if (day === 1) return zh ? "\u6628\u5929" : "Yesterday";
+  if (day === 2 && zh) return "\u524D\u5929";
+  return date;
 }
 var SearchIndex = class {
   constructor() {
@@ -69,7 +86,7 @@ var SearchIndex = class {
     for (const f of vault.getMarkdownFiles()) {
       try {
         const c = await vault.cachedRead(f);
-        this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime });
+        this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime, mtime: f.stat.mtime });
       } catch {
       }
     }
@@ -77,7 +94,7 @@ var SearchIndex = class {
   add(f, vault) {
     this.remove(f.path);
     vault.cachedRead(f).then((c) => {
-      this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime });
+      this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime, mtime: f.stat.mtime });
     });
   }
   remove(path) {
@@ -130,6 +147,10 @@ var SearchIndex = class {
       }
     }
     if (bi !== -1) s += Math.max(0, 20 - Math.min(bi / 50, 20));
+    if (matchType === "title" || bi !== -1) {
+      const ageDays = (Date.now() - e.mtime) / 864e5;
+      s += ageDays >= 0 ? Math.max(0, 50 - ageDays * 2) : 50;
+    }
     const snippet = bi >= 0 ? this.win(body, bi, q.length, 15) : e.title;
     const matchSentence = bi >= 0 ? this.sentence(body, bi, q.length) : null;
     return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence, matchType, titleMatches };
@@ -314,7 +335,7 @@ var Popup = class {
       const titleRow = document.createElement("div");
       titleRow.style.cssText = "display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;";
       const tEl = document.createElement("span");
-      tEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isTitle ? "color:var(--text-accent,#7aa2f7);" : ""}`;
+      tEl.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isTitle ? "color:var(--text-accent,#7aa2f7);" : ""}`;
       if (isTitle && r.titleMatches.length) {
         let last = 0;
         for (const mi of r.titleMatches) {
@@ -343,6 +364,10 @@ var Popup = class {
       badge.appendChild(ico);
       badge.appendChild(document.createTextNode(t(isTitle ? "title" : "content")));
       titleRow.appendChild(badge);
+      const timeEl = document.createElement("span");
+      timeEl.style.cssText = "flex-shrink:0;font-size:11px;font-weight:400;color:var(--text-muted,#888);";
+      timeEl.textContent = relTime(r.entry.mtime);
+      titleRow.appendChild(timeEl);
       item.appendChild(titleRow);
       const sn = document.createElement("div");
       const hasContent = !!r.matchSentence;

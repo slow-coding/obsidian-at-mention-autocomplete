@@ -1,7 +1,7 @@
 import { Plugin, TFile, Vault, MarkdownRenderer, Component, setIcon } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
-interface SearchEntry { title: string; path: string; content: string; ctime: number; }
+interface SearchEntry { title: string; path: string; content: string; ctime: number; mtime: number; }
 type MatchType = "title" | "content";
 interface SearchResult { entry: SearchEntry; snippet: string; matchSentence: string | null; matchType: MatchType; titleMatches: number[]; }
 
@@ -10,6 +10,7 @@ interface SearchResult { entry: SearchEntry; snippet: string; matchSentence: str
 // Multi-word: query words matched in order; each word = subsequence with
 // consecutive + word-boundary bonuses, gap penalty. Capped at 440 so tiers hold:
 // exact 2000 > prefix 800 > substring ~500 > fuzzy <= 440 > content-only <= 20.
+// All tiers add recency bonus 0-50 (edit-desc tiebreak; never lets content beat fuzzy).
 function fuzzyMatch(title: string, query: string): { score: number; indices: number[] } | null {
   const lower = title.toLowerCase();
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -38,23 +39,39 @@ function fuzzyMatch(title: string, query: string): { score: number; indices: num
 // === fuzzy-match end ===
 
 // === i18n start ===
-// Badge labels follow Obsidian's UI language (localStorage 'language'); fallback en.
+// UI strings follow Obsidian's UI language (localStorage 'language'); fallback en.
 const UI_TEXT: Record<string, Record<string, string>> = {
   title: { en: "Title", zh: "标题" },
   content: { en: "Body", zh: "正文" },
 };
+function currentLang(): string {
+  return (typeof localStorage !== "undefined" && localStorage.getItem("language")) || "en";
+}
 function t(key: string): string {
-  const lang = (typeof localStorage !== "undefined" && localStorage.getItem("language")) || "en";
   const dict = UI_TEXT[key];
   if (!dict) return key;
-  return lang.toLowerCase().startsWith("zh") ? dict.zh : dict.en;
+  return currentLang().toLowerCase().startsWith("zh") ? dict.zh : dict.en;
+}
+function pad2(n: number): string { return n < 10 ? "0" + n : String(n); }
+// Natural-language relative edit time: 今天/昨天/前天, then YYYY-MM-DD.
+// English: Today/Yesterday, then YYYY-MM-DD (no natural word for 2 days ago).
+export function relTime(ts: number): string {
+  const zh = currentLang().toLowerCase().startsWith("zh");
+  const d = new Date(ts), now = new Date();
+  const dayStart = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const day = Math.round((dayStart(now) - dayStart(d)) / 86400000);
+  const date = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  if (day <= 0) return zh ? "今天" : "Today";
+  if (day === 1) return zh ? "昨天" : "Yesterday";
+  if (day === 2 && zh) return "前天";
+  return date;
 }
 // === i18n end ===
 
 export class SearchIndex {
   private entries: SearchEntry[] = [];
-  async build(vault: Vault) { for (const f of vault.getMarkdownFiles()) { try { const c = await vault.cachedRead(f); this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime }); } catch {} } }
-  add(f: TFile, vault: Vault) { this.remove(f.path); vault.cachedRead(f).then(c => { this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime }); }); }
+  async build(vault: Vault) { for (const f of vault.getMarkdownFiles()) { try { const c = await vault.cachedRead(f); this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime, mtime: f.stat.mtime }); } catch {} } }
+  add(f: TFile, vault: Vault) { this.remove(f.path); vault.cachedRead(f).then(c => { this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime, mtime: f.stat.mtime }); }); }
   remove(path: string) { this.entries = this.entries.filter(e => e.path !== path); }
   search(query: string, limit = 20): SearchResult[] {
     if (!query) return [];
@@ -77,6 +94,12 @@ export class SearchIndex {
       if (fz) { s = fz.score; matchType = "title"; titleMatches = fz.indices; }
     }
     if (bi !== -1) s += Math.max(0, 20 - Math.min(bi / 50, 20));
+    // Recency bonus: edit-desc ordering within tiers (max 50, always below fuzzy title tier).
+    // Only applied to actual matches — a fresh note with no match must not leak into results.
+    if (matchType === "title" || bi !== -1) {
+      const ageDays = (Date.now() - e.mtime) / 86400000;
+      s += ageDays >= 0 ? Math.max(0, 50 - ageDays * 2) : 50;
+    }
     const snippet = bi >= 0 ? this.win(body, bi, q.length, 15) : e.title;
     const matchSentence = bi >= 0 ? this.sentence(body, bi, q.length) : null;
     return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence, matchType, titleMatches };
@@ -266,7 +289,7 @@ class Popup {
       const titleRow = document.createElement("div");
       titleRow.style.cssText = "display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;";
       const tEl = document.createElement("span");
-      tEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isTitle ? "color:var(--text-accent,#7aa2f7);" : ""}`;
+      tEl.style.cssText = `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isTitle ? "color:var(--text-accent,#7aa2f7);" : ""}`;
       if (isTitle && r.titleMatches.length) {
         let last = 0;
         for (const mi of r.titleMatches) {
@@ -290,6 +313,11 @@ class Popup {
       badge.appendChild(ico);
       badge.appendChild(document.createTextNode(t(isTitle ? "title" : "content")));
       titleRow.appendChild(badge);
+      // Edit time, natural-language relative (今天/昨天/前天 → YYYY-MM-DD)
+      const timeEl = document.createElement("span");
+      timeEl.style.cssText = "flex-shrink:0;font-size:11px;font-weight:400;color:var(--text-muted,#888);";
+      timeEl.textContent = relTime(r.entry.mtime);
+      titleRow.appendChild(timeEl);
       item.appendChild(titleRow);
       // Second line: content snippet (highlighted) or file path for title-only matches
       const sn = document.createElement("div");
