@@ -351,6 +351,7 @@ var Popup = class {
         tEl.textContent = r.entry.title;
       }
       titleRow.appendChild(tEl);
+      const isNarrow = window.innerWidth < 600;
       const badge = document.createElement("span");
       badge.style.cssText = `flex-shrink:0;display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;padding:1px 6px;border-radius:8px;${isTitle ? "background:var(--interactive-accent,#7c3aed);color:var(--text-on-accent,#fff);" : "background:var(--background-modifier-hover,#333);color:var(--text-muted,#888);"}`;
       const ico = document.createElement("span");
@@ -362,7 +363,9 @@ var Popup = class {
         svg.style.height = "10px";
       }
       badge.appendChild(ico);
-      badge.appendChild(document.createTextNode(t(isTitle ? "title" : "content")));
+      const badgeLabel = t(isTitle ? "title" : "content");
+      if (isNarrow) badge.title = badgeLabel;
+      else badge.appendChild(document.createTextNode(badgeLabel));
       titleRow.appendChild(badge);
       const timeEl = document.createElement("span");
       timeEl.style.cssText = "flex-shrink:0;font-size:11px;font-weight:400;color:var(--text-muted,#888);";
