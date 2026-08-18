@@ -1,10 +1,57 @@
-import { Plugin, TFile, Vault, MarkdownRenderer, Component } from "obsidian";
+import { Plugin, TFile, Vault, MarkdownRenderer, Component, setIcon } from "obsidian";
 import { EditorView } from "@codemirror/view";
 
 interface SearchEntry { title: string; path: string; content: string; ctime: number; }
-interface SearchResult { entry: SearchEntry; snippet: string; matchSentence: string | null; }
+type MatchType = "title" | "content";
+interface SearchResult { entry: SearchEntry; snippet: string; matchSentence: string | null; matchType: MatchType; titleMatches: number[]; }
 
-class SearchIndex {
+// === fuzzy-match start ===
+// Subsequence (fuzzy) title matching, like Obsidian's native [[ ]] suggester.
+// Multi-word: query words matched in order; each word = subsequence with
+// consecutive + word-boundary bonuses, gap penalty. Capped at 440 so tiers hold:
+// exact 2000 > prefix 800 > substring ~500 > fuzzy <= 440 > content-only <= 20.
+function fuzzyMatch(title: string, query: string): { score: number; indices: number[] } | null {
+  const lower = title.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return null;
+  let total = 0, searchFrom = 0;
+  const indices: number[] = [];
+  for (const word of words) {
+    let pos = searchFrom, lastIdx = -2, wordScore = 0;
+    const wIdx: number[] = [];
+    for (const ch of word) {
+      const found = lower.indexOf(ch, pos);
+      if (found === -1) return null;
+      wIdx.push(found);
+      wordScore += 15;
+      if (found === lastIdx + 1) wordScore += 25;
+      if (found === 0 || /[\s\-_/.]/.test(title.charAt(found - 1))) wordScore += 30;
+      pos = found + 1; lastIdx = found;
+    }
+    wordScore -= Math.min(wIdx[0] - searchFrom, 40);
+    total += Math.max(10, wordScore);
+    indices.push(...wIdx);
+    searchFrom = wIdx[wIdx.length - 1] + 1;
+  }
+  return { score: Math.min(100 + total, 440), indices };
+}
+// === fuzzy-match end ===
+
+// === i18n start ===
+// Badge labels follow Obsidian's UI language (localStorage 'language'); fallback en.
+const UI_TEXT: Record<string, Record<string, string>> = {
+  title: { en: "Title", zh: "标题" },
+  content: { en: "Body", zh: "正文" },
+};
+function t(key: string): string {
+  const lang = (typeof localStorage !== "undefined" && localStorage.getItem("language")) || "en";
+  const dict = UI_TEXT[key];
+  if (!dict) return key;
+  return lang.toLowerCase().startsWith("zh") ? dict.zh : dict.en;
+}
+// === i18n end ===
+
+export class SearchIndex {
   private entries: SearchEntry[] = [];
   async build(vault: Vault) { for (const f of vault.getMarkdownFiles()) { try { const c = await vault.cachedRead(f); this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime }); } catch {} } }
   add(f: TFile, vault: Vault) { this.remove(f.path); vault.cachedRead(f).then(c => { this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime }); }); }
@@ -16,14 +63,23 @@ class SearchIndex {
     return scored.sort((a, b) => b.s - a.s).slice(0, limit).map(x => x.r);
   }
   stripFM(c: string): string { if (c.startsWith("---")) { const end = c.indexOf("---", 3); if (end !== -1) return c.slice(end + 3); } return c; }
+  private range(from: number, len: number): number[] { const r: number[] = []; for (let i = 0; i < len; i++) r.push(from + i); return r; }
   private match(e: SearchEntry, q: string): SearchResult & { s: number } {
     const lt = e.title.toLowerCase(), body = this.stripFM(e.content), lb = body.toLowerCase(), ti = lt.indexOf(q), bi = lb.indexOf(q);
     let s = 0;
-    if (lt === q) s = 2000; else if (ti === 0) s = 800 + (100 - Math.min(q.length, 100)); else if (ti > 0) s = 500 - Math.min(ti, 100);
+    let matchType: MatchType = "content";
+    let titleMatches: number[] = [];
+    if (lt === q) { s = 2000; matchType = "title"; titleMatches = this.range(0, q.length); }
+    else if (ti === 0) { s = 800 + (100 - Math.min(q.length, 100)); matchType = "title"; titleMatches = this.range(0, q.length); }
+    else if (ti > 0) { s = 500 - Math.min(ti, 100); matchType = "title"; titleMatches = this.range(ti, q.length); }
+    else {
+      const fz = fuzzyMatch(e.title, q);
+      if (fz) { s = fz.score; matchType = "title"; titleMatches = fz.indices; }
+    }
     if (bi !== -1) s += Math.max(0, 20 - Math.min(bi / 50, 20));
     const snippet = bi >= 0 ? this.win(body, bi, q.length, 15) : e.title;
     const matchSentence = bi >= 0 ? this.sentence(body, bi, q.length) : null;
-    return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence };
+    return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence, matchType, titleMatches };
   }
   private cleanMD(r: string): string { return r.replace(/!\[\[[^\]]*\]\]/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_~`]+/g, "").replace(/->/g, " ").replace(/>\s?/g, "").replace(/^\s*[-*+]\s+/g, "").replace(/^\s*\d+\.\s+/g, "").replace(/\|/g, "/").replace(/[\[\]]/g, "").trim(); }
   win(content: string, start: number, len: number, w: number): string { const s = Math.max(0, start - w), e = Math.min(content.length, start + len + w); let r = content.slice(s, e); if (s > 0) r = "…" + r; if (e < content.length) r = r + "…"; return this.cleanMD(r).replace(/\n+/g, " · ").replace(/\s{2,}/g, " ").replace(/^[。！？.!?；;，,、\s\-–—]+/, "").replace(/[。！？.!?；;，,、\s\-–—]+$/, "").replace(/\s-\s/g, " ").replace(/\s-$/, "").trim() || "(empty)"; }
@@ -78,7 +134,7 @@ const AT_RE = /@([^\[\]()]*)$/u;
 
 class Popup {
   el: HTMLElement;
-  private detailEl: HTMLElement;
+  detailEl: HTMLElement;
   private detailCmp: Component;
   private items: HTMLElement[] = [];
   private results: SearchResult[] = [];
@@ -159,19 +215,34 @@ class Popup {
   accept() {
     const r = this.results[this.sel];
     if (!r || !this.view) return;
-    const alias = r.matchSentence; // full sentence, not window snippet
     const title = r.entry.title;
-    // Check if alias starts with a heading (from findHeading)
-    const headingSep = alias ? alias.indexOf(" › ") : -1;
-    const hasHeading = headingSep > 0;
-    const heading = hasHeading ? alias!.slice(0, headingSep) : null;
-    const sentence = hasHeading ? alias!.slice(headingSep + 3) : alias;
-    const target = heading ? `${title}#${heading}` : title;
-    const insert = `[[${target}|${sentence || title}]]`;
     const pos = this.view.state.selection.main.head;
-    const selText = sentence || title;
+    // Title match → plain [[title]] like native [[ ]] completion.
+    // Never emit [[title|title]] — wikilink alias defaults to title anyway.
+    if (r.matchType === "title" || !r.matchSentence) {
+      const insert = `[[${title}]]`;
+      this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: this.from + insert.length } });
+      this.hide(); this.view.focus();
+      return;
+    }
+    // Content-only match → rich link [[title#heading|sentence]]
+    const alias = r.matchSentence; // full sentence, not window snippet
+    // Check if alias starts with a heading (from findHeading)
+    const headingSep = alias.indexOf(" › ");
+    const hasHeading = headingSep > 0;
+    const heading = hasHeading ? alias.slice(0, headingSep) : null;
+    const sentence = hasHeading ? alias.slice(headingSep + 3) : alias;
+    // Guard: alias identical to title is redundant — never [[xxx|xxx]]
+    if (!sentence || sentence === title) {
+      const insert = `[[${title}]]`;
+      this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: this.from + insert.length } });
+      this.hide(); this.view.focus();
+      return;
+    }
+    const target = heading ? `${title}#${heading}` : title;
+    const insert = `[[${target}|${sentence}]]`;
     const newEnd = this.from + insert.length;
-    this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - selText.length - 2, head: newEnd - 2 } });
+    this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - sentence.length - 2, head: newEnd - 2 } });
     this.hide(); this.view.focus();
   }
 
@@ -190,16 +261,49 @@ class Popup {
       const r = this.results[i];
       const item = document.createElement("div");
       item.style.cssText = `padding:8px 16px;cursor:pointer;line-height:1.4;${i === this.sel ? "background:var(--background-modifier-hover, #333);" : ""}`;
-      const title = document.createElement("div"); title.style.cssText = "font-weight:600;font-size:13px;"; title.textContent = r.entry.title; item.appendChild(title);
+      // Title row: matched chars highlighted in title + match-type badge
+      const isTitle = r.matchType === "title";
+      const titleRow = document.createElement("div");
+      titleRow.style.cssText = "display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;";
+      const tEl = document.createElement("span");
+      tEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isTitle ? "color:var(--text-accent,#7aa2f7);" : ""}`;
+      if (isTitle && r.titleMatches.length) {
+        let last = 0;
+        for (const mi of r.titleMatches) {
+          if (mi > last) tEl.appendChild(document.createTextNode(r.entry.title.slice(last, mi)));
+          const mk = document.createElement("b");
+          mk.style.cssText = "background:#FFE066;color:#333;padding:0 1px;border-radius:2px;";
+          mk.textContent = r.entry.title.charAt(mi);
+          tEl.appendChild(mk);
+          last = mi + 1;
+        }
+        tEl.appendChild(document.createTextNode(r.entry.title.slice(last)));
+      } else { tEl.textContent = r.entry.title; }
+      titleRow.appendChild(tEl);
+      const badge = document.createElement("span");
+      badge.style.cssText = `flex-shrink:0;display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;padding:1px 6px;border-radius:8px;${isTitle ? "background:var(--interactive-accent,#7c3aed);color:var(--text-on-accent,#fff);" : "background:var(--background-modifier-hover,#333);color:var(--text-muted,#888);"}`;
+      const ico = document.createElement("span");
+      ico.style.cssText = "display:inline-flex;align-items:center;";
+      setIcon(ico, isTitle ? "file-text" : "search");
+      const svg = ico.querySelector("svg");
+      if (svg) { (svg as SVGElement).style.width = "10px"; (svg as SVGElement).style.height = "10px"; }
+      badge.appendChild(ico);
+      badge.appendChild(document.createTextNode(t(isTitle ? "title" : "content")));
+      titleRow.appendChild(badge);
+      item.appendChild(titleRow);
+      // Second line: content snippet (highlighted) or file path for title-only matches
       const sn = document.createElement("div");
-      sn.style.cssText = `font-size:12px;margin-top:2px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:${r.matchSentence ? "var(--text-accent, #7aa2f7)" : "var(--text-muted, #888)"};`;
-      const q = this._lastQuery, ls = r.snippet.toLowerCase(), lq = q.toLowerCase();
-      if (q && ls.includes(lq)) {
-        const idx = ls.indexOf(lq);
-        sn.appendChild(document.createTextNode(r.snippet.slice(0, idx)));
-        const mk = document.createElement("b"); mk.style.cssText = "background:#FFE066;color:#333;padding:0 2px;border-radius:2px;"; mk.textContent = r.snippet.slice(idx, idx + q.length); sn.appendChild(mk);
-        sn.appendChild(document.createTextNode(r.snippet.slice(idx + q.length)));
-      } else { sn.textContent = r.snippet; }
+      const hasContent = !!r.matchSentence;
+      sn.style.cssText = `font-size:12px;margin-top:2px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:${hasContent ? "var(--text-accent, #7aa2f7)" : "var(--text-muted, #888)"};`;
+      if (hasContent) {
+        const q = this._lastQuery, ls = r.snippet.toLowerCase(), lq = q.toLowerCase();
+        if (q && ls.includes(lq)) {
+          const idx = ls.indexOf(lq);
+          sn.appendChild(document.createTextNode(r.snippet.slice(0, idx)));
+          const mk = document.createElement("b"); mk.style.cssText = "background:#FFE066;color:#333;padding:0 2px;border-radius:2px;"; mk.textContent = r.snippet.slice(idx, idx + q.length); sn.appendChild(mk);
+          sn.appendChild(document.createTextNode(r.snippet.slice(idx + q.length)));
+        } else { sn.textContent = r.snippet; }
+      } else { sn.textContent = r.entry.path; }
       item.appendChild(sn);
       const idx = i;
       item.addEventListener("mousedown", e => { e.preventDefault(); this.sel = idx; this.accept(); });
@@ -289,6 +393,7 @@ export default class AtMentionPlugin extends Plugin {
   private popup: Popup | null = null;
   private kbView: EditorView | null = null;
   private pending = new Set<string>();
+  private dismissed = false;
 
   async onload() {
     setTimeout(async () => {

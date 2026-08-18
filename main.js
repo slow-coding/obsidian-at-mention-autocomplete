@@ -20,10 +20,47 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // main.ts
 var main_exports = {};
 __export(main_exports, {
+  SearchIndex: () => SearchIndex,
   default: () => AtMentionPlugin
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
+function fuzzyMatch(title, query) {
+  const lower = title.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return null;
+  let total = 0, searchFrom = 0;
+  const indices = [];
+  for (const word of words) {
+    let pos = searchFrom, lastIdx = -2, wordScore = 0;
+    const wIdx = [];
+    for (const ch of word) {
+      const found = lower.indexOf(ch, pos);
+      if (found === -1) return null;
+      wIdx.push(found);
+      wordScore += 15;
+      if (found === lastIdx + 1) wordScore += 25;
+      if (found === 0 || /[\s\-_/.]/.test(title.charAt(found - 1))) wordScore += 30;
+      pos = found + 1;
+      lastIdx = found;
+    }
+    wordScore -= Math.min(wIdx[0] - searchFrom, 40);
+    total += Math.max(10, wordScore);
+    indices.push(...wIdx);
+    searchFrom = wIdx[wIdx.length - 1] + 1;
+  }
+  return { score: Math.min(100 + total, 440), indices };
+}
+var UI_TEXT = {
+  title: { en: "Title", zh: "\u6807\u9898" },
+  content: { en: "Body", zh: "\u6B63\u6587" }
+};
+function t(key) {
+  const lang = typeof localStorage !== "undefined" && localStorage.getItem("language") || "en";
+  const dict = UI_TEXT[key];
+  if (!dict) return key;
+  return lang.toLowerCase().startsWith("zh") ? dict.zh : dict.en;
+}
 var SearchIndex = class {
   constructor() {
     this.entries = [];
@@ -62,16 +99,40 @@ var SearchIndex = class {
     }
     return c;
   }
+  range(from, len) {
+    const r = [];
+    for (let i = 0; i < len; i++) r.push(from + i);
+    return r;
+  }
   match(e, q) {
     const lt = e.title.toLowerCase(), body = this.stripFM(e.content), lb = body.toLowerCase(), ti = lt.indexOf(q), bi = lb.indexOf(q);
     let s = 0;
-    if (lt === q) s = 2e3;
-    else if (ti === 0) s = 800 + (100 - Math.min(q.length, 100));
-    else if (ti > 0) s = 500 - Math.min(ti, 100);
+    let matchType = "content";
+    let titleMatches = [];
+    if (lt === q) {
+      s = 2e3;
+      matchType = "title";
+      titleMatches = this.range(0, q.length);
+    } else if (ti === 0) {
+      s = 800 + (100 - Math.min(q.length, 100));
+      matchType = "title";
+      titleMatches = this.range(0, q.length);
+    } else if (ti > 0) {
+      s = 500 - Math.min(ti, 100);
+      matchType = "title";
+      titleMatches = this.range(ti, q.length);
+    } else {
+      const fz = fuzzyMatch(e.title, q);
+      if (fz) {
+        s = fz.score;
+        matchType = "title";
+        titleMatches = fz.indices;
+      }
+    }
     if (bi !== -1) s += Math.max(0, 20 - Math.min(bi / 50, 20));
     const snippet = bi >= 0 ? this.win(body, bi, q.length, 15) : e.title;
     const matchSentence = bi >= 0 ? this.sentence(body, bi, q.length) : null;
-    return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence };
+    return { s: Math.max(0, Math.floor(s)), entry: e, snippet, matchSentence, matchType, titleMatches };
   }
   cleanMD(r) {
     return r.replace(/!\[\[[^\]]*\]\]/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_~`]+/g, "").replace(/->/g, " ").replace(/>\s?/g, "").replace(/^\s*[-*+]\s+/g, "").replace(/^\s*\d+\.\s+/g, "").replace(/\|/g, "/").replace(/[\[\]]/g, "").trim();
@@ -206,18 +267,31 @@ var Popup = class {
   accept() {
     const r = this.results[this.sel];
     if (!r || !this.view) return;
-    const alias = r.matchSentence;
     const title = r.entry.title;
-    const headingSep = alias ? alias.indexOf(" \u203A ") : -1;
+    const pos = this.view.state.selection.main.head;
+    if (r.matchType === "title" || !r.matchSentence) {
+      const insert2 = `[[${title}]]`;
+      this.view.dispatch({ changes: { from: this.from, to: pos, insert: insert2 }, selection: { anchor: this.from + insert2.length } });
+      this.hide();
+      this.view.focus();
+      return;
+    }
+    const alias = r.matchSentence;
+    const headingSep = alias.indexOf(" \u203A ");
     const hasHeading = headingSep > 0;
     const heading = hasHeading ? alias.slice(0, headingSep) : null;
     const sentence = hasHeading ? alias.slice(headingSep + 3) : alias;
+    if (!sentence || sentence === title) {
+      const insert2 = `[[${title}]]`;
+      this.view.dispatch({ changes: { from: this.from, to: pos, insert: insert2 }, selection: { anchor: this.from + insert2.length } });
+      this.hide();
+      this.view.focus();
+      return;
+    }
     const target = heading ? `${title}#${heading}` : title;
-    const insert = `[[${target}|${sentence || title}]]`;
-    const pos = this.view.state.selection.main.head;
-    const selText = sentence || title;
+    const insert = `[[${target}|${sentence}]]`;
     const newEnd = this.from + insert.length;
-    this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - selText.length - 2, head: newEnd - 2 } });
+    this.view.dispatch({ changes: { from: this.from, to: pos, insert }, selection: { anchor: newEnd - sentence.length - 2, head: newEnd - 2 } });
     this.hide();
     this.view.focus();
   }
@@ -236,23 +310,58 @@ var Popup = class {
       const r = this.results[i];
       const item = document.createElement("div");
       item.style.cssText = `padding:8px 16px;cursor:pointer;line-height:1.4;${i === this.sel ? "background:var(--background-modifier-hover, #333);" : ""}`;
-      const title = document.createElement("div");
-      title.style.cssText = "font-weight:600;font-size:13px;";
-      title.textContent = r.entry.title;
-      item.appendChild(title);
-      const sn = document.createElement("div");
-      sn.style.cssText = `font-size:12px;margin-top:2px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:${r.matchSentence ? "var(--text-accent, #7aa2f7)" : "var(--text-muted, #888)"};`;
-      const q = this._lastQuery, ls = r.snippet.toLowerCase(), lq = q.toLowerCase();
-      if (q && ls.includes(lq)) {
-        const idx2 = ls.indexOf(lq);
-        sn.appendChild(document.createTextNode(r.snippet.slice(0, idx2)));
-        const mk = document.createElement("b");
-        mk.style.cssText = "background:#FFE066;color:#333;padding:0 2px;border-radius:2px;";
-        mk.textContent = r.snippet.slice(idx2, idx2 + q.length);
-        sn.appendChild(mk);
-        sn.appendChild(document.createTextNode(r.snippet.slice(idx2 + q.length)));
+      const isTitle = r.matchType === "title";
+      const titleRow = document.createElement("div");
+      titleRow.style.cssText = "display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;";
+      const tEl = document.createElement("span");
+      tEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isTitle ? "color:var(--text-accent,#7aa2f7);" : ""}`;
+      if (isTitle && r.titleMatches.length) {
+        let last = 0;
+        for (const mi of r.titleMatches) {
+          if (mi > last) tEl.appendChild(document.createTextNode(r.entry.title.slice(last, mi)));
+          const mk = document.createElement("b");
+          mk.style.cssText = "background:#FFE066;color:#333;padding:0 1px;border-radius:2px;";
+          mk.textContent = r.entry.title.charAt(mi);
+          tEl.appendChild(mk);
+          last = mi + 1;
+        }
+        tEl.appendChild(document.createTextNode(r.entry.title.slice(last)));
       } else {
-        sn.textContent = r.snippet;
+        tEl.textContent = r.entry.title;
+      }
+      titleRow.appendChild(tEl);
+      const badge = document.createElement("span");
+      badge.style.cssText = `flex-shrink:0;display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;padding:1px 6px;border-radius:8px;${isTitle ? "background:var(--interactive-accent,#7c3aed);color:var(--text-on-accent,#fff);" : "background:var(--background-modifier-hover,#333);color:var(--text-muted,#888);"}`;
+      const ico = document.createElement("span");
+      ico.style.cssText = "display:inline-flex;align-items:center;";
+      (0, import_obsidian.setIcon)(ico, isTitle ? "file-text" : "search");
+      const svg = ico.querySelector("svg");
+      if (svg) {
+        svg.style.width = "10px";
+        svg.style.height = "10px";
+      }
+      badge.appendChild(ico);
+      badge.appendChild(document.createTextNode(t(isTitle ? "title" : "content")));
+      titleRow.appendChild(badge);
+      item.appendChild(titleRow);
+      const sn = document.createElement("div");
+      const hasContent = !!r.matchSentence;
+      sn.style.cssText = `font-size:12px;margin-top:2px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:${hasContent ? "var(--text-accent, #7aa2f7)" : "var(--text-muted, #888)"};`;
+      if (hasContent) {
+        const q = this._lastQuery, ls = r.snippet.toLowerCase(), lq = q.toLowerCase();
+        if (q && ls.includes(lq)) {
+          const idx2 = ls.indexOf(lq);
+          sn.appendChild(document.createTextNode(r.snippet.slice(0, idx2)));
+          const mk = document.createElement("b");
+          mk.style.cssText = "background:#FFE066;color:#333;padding:0 2px;border-radius:2px;";
+          mk.textContent = r.snippet.slice(idx2, idx2 + q.length);
+          sn.appendChild(mk);
+          sn.appendChild(document.createTextNode(r.snippet.slice(idx2 + q.length)));
+        } else {
+          sn.textContent = r.snippet;
+        }
+      } else {
+        sn.textContent = r.entry.path;
       }
       item.appendChild(sn);
       const idx = i;
@@ -292,8 +401,8 @@ var Popup = class {
     this.detailCmp.load();
     import_obsidian.MarkdownRenderer.render(this.app, body, this.detailEl, r.entry.path, this.detailCmp);
     setTimeout(() => {
-      this.detailEl.querySelectorAll("table").forEach((t) => {
-        t.style.cssText = "border-collapse:collapse;width:100%;margin:8px 0;";
+      this.detailEl.querySelectorAll("table").forEach((t2) => {
+        t2.style.cssText = "border-collapse:collapse;width:100%;margin:8px 0;";
       });
       this.detailEl.querySelectorAll("th, td").forEach((c) => {
         c.style.cssText = "border:1px solid var(--background-modifier-border,#444);padding:4px 8px;text-align:left;";
@@ -353,10 +462,10 @@ var Popup = class {
   }
 };
 function debounce(fn, ms) {
-  let t;
+  let t2;
   return () => {
-    clearTimeout(t);
-    t = setTimeout(fn, ms);
+    clearTimeout(t2);
+    t2 = setTimeout(fn, ms);
   };
 }
 var AtMentionPlugin = class extends import_obsidian.Plugin {
@@ -366,6 +475,7 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
     this.popup = null;
     this.kbView = null;
     this.pending = /* @__PURE__ */ new Set();
+    this.dismissed = false;
   }
   async onload() {
     setTimeout(async () => {
@@ -422,8 +532,8 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
       this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.popup?.hide()));
       this.registerDomEvent(document, "mousedown", (e) => {
         if (!this.popup?.visible) return;
-        const t = e.target;
-        if (!this.popup.el.contains(t) && !this.popup.detailEl.contains(t)) {
+        const t2 = e.target;
+        if (!this.popup.el.contains(t2) && !this.popup.detailEl.contains(t2)) {
           this.popup.hide();
           this.dismissed = true;
         }

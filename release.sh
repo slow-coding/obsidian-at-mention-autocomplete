@@ -15,7 +15,7 @@ REPO="slow-coding/obsidian-at-mention-autocomplete"
 
 # 1. 隐私检查
 echo "==> 隐私检查..."
-if grep -riE "token|secret|password|api[_-]?key|ghp_|gho_|github_pat" . --exclude-dir=node_modules | grep -v "release.sh"; then
+if grep -riE "token|secret|password|api[_-]?key|ghp_|gho_|github_pat" . --exclude-dir=node_modules --exclude-dir=.git | grep -v "release.sh"; then
   echo "❌ 发现疑似敏感信息，终止！"
   exit 1
 fi
