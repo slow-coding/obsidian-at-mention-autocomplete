@@ -18,6 +18,7 @@ Obsidian's built-in `[[` autocomplete only matches note **titles**, and even the
 - **Title-first fuzzy matching** — `@` matches file titles like `[[ ]]` (subsequence + multi-word), ranked above content matches: exact > prefix > substring > fuzzy > content-only
 - **Match-type marks** — title matches: accent title text + highlighted matched chars + accent `标题` chip (file icon); content matches: muted `正文` chip (search icon)
 - **Clean title links** — picking a title match inserts a plain `[[Title]]` (never `[[Title|Title]]`), content matches insert `[[note#heading|matching sentence]]`
+- **Edit-time sorting + relative dates** — results tie-break by last edit (descending); every hit shows a natural-language relative time: 今天 / 昨天 / 前天, then `YYYY-MM-DD`
 - **`@` trigger** — type `@keyword` anywhere in a note to see matches
 - **Rendered detail panel** — hover or keyboard-navigate to see the full note body with markdown rendering
 - **Keyword highlighting** — bright yellow highlights in both the suggestion list and detail panel
