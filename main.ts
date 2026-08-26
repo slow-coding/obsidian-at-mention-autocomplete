@@ -43,6 +43,8 @@ function fuzzyMatch(title: string, query: string): { score: number; indices: num
 const UI_TEXT: Record<string, Record<string, string>> = {
   title: { en: "Title", zh: "标题" },
   content: { en: "Body", zh: "正文" },
+  noMatch: { en: "No matching notes", zh: "没有匹配的笔记" },
+  indexInfo: { en: "Indexed {n} notes · try another keyword", zh: "已索引 {n} 条笔记 · 换个关键词试试" },
 };
 function currentLang(): string {
   return (typeof localStorage !== "undefined" && localStorage.getItem("language")) || "en";
@@ -70,6 +72,8 @@ export function relTime(ts: number): string {
 
 export class SearchIndex {
   private entries: SearchEntry[] = [];
+  /** Number of indexed notes (used by empty-state hint). */
+  get size(): number { return this.entries.length; }
   async build(vault: Vault) { for (const f of vault.getMarkdownFiles()) { try { const c = await vault.cachedRead(f); this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime, mtime: f.stat.mtime }); } catch {} } }
   add(f: TFile, vault: Vault) { this.remove(f.path); vault.cachedRead(f).then(c => { this.entries.push({ title: f.basename, path: f.path, content: c, ctime: f.stat.ctime, mtime: f.stat.mtime }); }); }
   remove(path: string) { this.entries = this.entries.filter(e => e.path !== path); }
@@ -181,40 +185,77 @@ class Popup {
 
   show(view: EditorView, from: number, query: string) {
     this.view = view; this.from = from; this._lastQuery = query;
+    // Mount popup in the editor's own window document. Obsidian 1.13 multi-window:
+    // editor-change events can arrive from another window's editor (popout/floating),
+    // and the popup must follow the triggering window, not the plugin's own window
+    // (Darren 2026-08-26: popup showed up in the main window instead of the dragged one).
+    // Also re-attach if the element got detached from the DOM for any reason.
+    const doc = (view.dom && view.dom.ownerDocument) || document;
+    if (!this.el.parentNode || this.el.ownerDocument !== doc) {
+      if (this.el.parentNode) this.el.remove();
+      if (this.detailEl.parentNode) this.detailEl.remove();
+      doc.body.appendChild(this.el);
+      doc.body.appendChild(this.detailEl);
+    }
     this.results = this.index.search(query, 20); this.sel = 0;
     if (!this.results.length) {
       // Don't hide — show empty state so popup stays, user can backspace
       this.results = []; this.sel = 0;
     }
-    const coords = view.coordsAtPos(from);
-    if (!coords) { this.hide(); return; }
+    // Locate popup. coordsAtPos can return invalid/negative values on Obsidian 1.13
+    // (cursor at doc start on a fresh tab → from=-1 bug, or mid-scroll animation):
+    // fall back to the editor's own rect and re-position once after a frame.
+    let coords = view.coordsAtPos(from);
+    const validCoords = coords && Number.isFinite(coords.left) && Number.isFinite(coords.top);
+    if (!validCoords) {
+      const r = view.dom.getBoundingClientRect();
+      coords = { left: r.left + 4, top: r.top, bottom: r.bottom, right: r.right };
+    }
+    this.place(coords);
+    if (!validCoords) {
+      // Retry with fresh coords after a frame (scroll settles, caret renders).
+      setTimeout(() => {
+        if (!this.visible || !this.view) return;
+        const c2 = this.view.coordsAtPos(from);
+        if (c2 && Number.isFinite(c2.left) && Number.isFinite(c2.top)) {
+          // refresh offsetHeight for the above/below decision, then place again
+          this.place(c2);
+        }
+      }, 80);
+    }
+    this.el.style.display = "block";
+    this.render();
+    this.showDetail(0);
+  }
+
+  /** Position the popup at the given viewport coords (above/below + clamps). */
+  private place(coords: { left: number; top: number; bottom: number; right: number }) {
     // -- responsive sizing: fit within viewport on mobile --
-    const isNarrow = window.innerWidth < 600;
-    const popupMaxW = isNarrow ? Math.min(window.innerWidth - 16, 400) : 640;
+    const isNarrow = this.el.ownerDocument.defaultView!.innerWidth < 600;
+    const winW = this.el.ownerDocument.defaultView!.innerWidth;
+    const winH = this.el.ownerDocument.defaultView!.innerHeight;
+    const popupMaxW = isNarrow ? Math.min(winW - 16, 400) : 640;
     const popupMinW = isNarrow ? popupMaxW : 380;
     this.el.style.minWidth = popupMinW + "px";
     this.el.style.maxWidth = popupMaxW + "px";
     // Clamp left so popup never overflows viewport
     this.el.style.left = Math.min(
       Math.max(4, coords.left),
-      Math.max(4, window.innerWidth - popupMaxW - 8)
+      Math.max(4, winW - popupMaxW - 8)
     ) + "px";
     // Sticky position: only decide above/below on first open, keep until hidden
     const wasHidden = this.el.style.display === "none";
     if (wasHidden) {
-      this._positionAbove = coords.bottom + 360 + 8 > window.innerHeight;
+      this._positionAbove = coords.bottom + 360 + 8 > winH;
     }
-    const maxH = Math.min(360, window.innerHeight * 0.55);
+    const maxH = Math.min(360, winH * 0.55);
     this.el.style.maxHeight = maxH + "px";
     this.el.style.top = this._positionAbove
       ? Math.max(4, coords.top - maxH - 8) + "px"
       : (coords.bottom + 4) + "px";
     // Hard clamp: never let popup bottom exceed viewport
-    const clampTop = window.innerHeight - Math.min(this.el.offsetHeight || 100, maxH) - 16;
+    const clampTop = winH - Math.min(this.el.offsetHeight || 100, maxH) - 16;
     this.el.style.top = Math.min(parseFloat(this.el.style.top), Math.max(4, clampTop)) + "px";
-    this.el.style.display = "block";
-    this.render();
-    this.showDetail(0);
   }
 
   hide() { this.el.style.display = "none"; this.detailEl.style.display = "none"; this.detailEl.innerHTML = ""; this.items = []; this.results = []; this.view = null; }
@@ -274,9 +315,17 @@ class Popup {
     this.el.innerHTML = "";
     this.items = [];
     if (!this.results.length) {
+      // Empty state: friendly hint + indexed-note count so a tiny vault
+      // doesn't look like a broken popup (Darren 2026-08-26).
       const empty = document.createElement("div");
-      empty.style.cssText = "padding:12px 16px;color:var(--text-muted);font-size:13px;";
-      empty.textContent = "No matching notes";
+      empty.style.cssText = "display:flex;flex-direction:column;justify-content:center;gap:4px;min-height:88px;padding:14px 16px;color:var(--text-muted);font-size:13px;line-height:1.5;";
+      const line1 = document.createElement("div");
+      line1.textContent = t("noMatch");
+      const line2 = document.createElement("div");
+      line2.style.cssText = "font-size:12px;opacity:0.75;";
+      line2.textContent = t("indexInfo").replace("{n}", String(this.index.size));
+      empty.appendChild(line1);
+      empty.appendChild(line2);
       this.el.appendChild(empty);
       return;
     }
@@ -442,6 +491,22 @@ export default class AtMentionPlugin extends Plugin {
       this.registerEvent(this.app.workspace.on("editor-change", (editor) => {
         const view = (editor as any).cm as EditorView | undefined;
         if (!view) return;
+        // Only respond to editors that live in THIS window. Obsidian 1.13+
+        // broadcasts editor-change across popout windows, so every window's
+        // plugin instance receives every editor's events; without this filter
+        // the popup gets shown twice and can land in the wrong window
+        // (Darren 2026-08-26: popup escaped to the main window).
+        // Note: in 1.13 the editor DOM (cm.dom) lives in the "content host"
+        // window, which is the window that must own the popup.
+        // Multi-window (Obsidian 1.13): every window runs its own plugin instance and
+        // editor-change is broadcast across windows. We deliberately do NOT filter by
+        // cm.dom.ownerDocument here — newly-created windows / shared leaves have their
+        // editor cm.dom owned by the host window, and such a filter made the popup
+        // never appear there (Darren 2026-08-26 #2). Instead every instance shows the
+        // popup; Popup.show mounts it into the window that owns the editor DOM (the
+        // window the user actually sees the editor in), and registerKb is idempotent
+        // per view via a DOM marker so keyboard handlers are registered exactly once
+        // even though multiple instances race on the same view.
         const pos = view.state.selection.main.head;
         const line = view.state.doc.lineAt(pos);
         const before = line.text.slice(0, pos - line.from);
@@ -449,7 +514,7 @@ export default class AtMentionPlugin extends Plugin {
         if (!match) { this.popup?.hide(); this.dismissed = false; return; }
         // Don't re-show if user explicitly dismissed this @ session
         if (this.dismissed) return;
-        const query = match[1], from = pos - query.length - 1;
+        const query = match[1], from = Math.max(0, pos - query.length - 1);
         if (!this.popup) { this.popup = new Popup(this.index, this.app); }
       // Register keyboard only once per view
       if (this.kbView !== view) {
@@ -471,6 +536,12 @@ export default class AtMentionPlugin extends Plugin {
   }
 
   private registerKb(view: EditorView) {
+    // Idempotent per editor view: with multi-window broadcast every plugin instance
+    // races on the same view, so keydown must be attached exactly once. The marker
+    // lives on the DOM element (shared across instances / windows).
+    const dom = view.dom as HTMLElement & { __atMentionKb?: boolean };
+    if (dom.__atMentionKb) return;
+    dom.__atMentionKb = true;
     let composing = false;
     view.dom.addEventListener("compositionstart", () => { composing = true; });
     view.dom.addEventListener("compositionend", () => { composing = false; });
