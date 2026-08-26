@@ -54,7 +54,9 @@ function fuzzyMatch(title, query) {
 }
 var UI_TEXT = {
   title: { en: "Title", zh: "\u6807\u9898" },
-  content: { en: "Body", zh: "\u6B63\u6587" }
+  content: { en: "Body", zh: "\u6B63\u6587" },
+  noMatch: { en: "No matching notes", zh: "\u6CA1\u6709\u5339\u914D\u7684\u7B14\u8BB0" },
+  indexInfo: { en: "Indexed {n} notes \xB7 try another keyword", zh: "\u5DF2\u7D22\u5F15 {n} \u6761\u7B14\u8BB0 \xB7 \u6362\u4E2A\u5173\u952E\u8BCD\u8BD5\u8BD5" }
 };
 function currentLang() {
   return typeof localStorage !== "undefined" && localStorage.getItem("language") || "en";
@@ -81,6 +83,10 @@ function relTime(ts) {
 var SearchIndex = class {
   constructor() {
     this.entries = [];
+  }
+  /** Number of indexed notes (used by empty-state hint). */
+  get size() {
+    return this.entries.length;
   }
   async build(vault) {
     for (const f of vault.getMarkdownFiles()) {
@@ -228,38 +234,61 @@ var Popup = class {
     this.view = view;
     this.from = from;
     this._lastQuery = query;
+    const doc = view.dom && view.dom.ownerDocument || document;
+    if (!this.el.parentNode || this.el.ownerDocument !== doc) {
+      if (this.el.parentNode) this.el.remove();
+      if (this.detailEl.parentNode) this.detailEl.remove();
+      doc.body.appendChild(this.el);
+      doc.body.appendChild(this.detailEl);
+    }
     this.results = this.index.search(query, 20);
     this.sel = 0;
     if (!this.results.length) {
       this.results = [];
       this.sel = 0;
     }
-    const coords = view.coordsAtPos(from);
-    if (!coords) {
-      this.hide();
-      return;
+    let coords = view.coordsAtPos(from);
+    const validCoords = coords && Number.isFinite(coords.left) && Number.isFinite(coords.top);
+    if (!validCoords) {
+      const r = view.dom.getBoundingClientRect();
+      coords = { left: r.left + 4, top: r.top, bottom: r.bottom, right: r.right };
     }
-    const isNarrow = window.innerWidth < 600;
-    const popupMaxW = isNarrow ? Math.min(window.innerWidth - 16, 400) : 640;
+    this.place(coords);
+    if (!validCoords) {
+      setTimeout(() => {
+        if (!this.visible || !this.view) return;
+        const c2 = this.view.coordsAtPos(from);
+        if (c2 && Number.isFinite(c2.left) && Number.isFinite(c2.top)) {
+          this.place(c2);
+        }
+      }, 80);
+    }
+    this.el.style.display = "block";
+    this.render();
+    this.showDetail(0);
+  }
+  /** Position the popup at the given viewport coords (above/below + clamps). */
+  place(coords) {
+    const isNarrow = this.el.ownerDocument.defaultView.innerWidth < 600;
+    const winW = this.el.ownerDocument.defaultView.innerWidth;
+    const winH = this.el.ownerDocument.defaultView.innerHeight;
+    const popupMaxW = isNarrow ? Math.min(winW - 16, 400) : 640;
     const popupMinW = isNarrow ? popupMaxW : 380;
     this.el.style.minWidth = popupMinW + "px";
     this.el.style.maxWidth = popupMaxW + "px";
     this.el.style.left = Math.min(
       Math.max(4, coords.left),
-      Math.max(4, window.innerWidth - popupMaxW - 8)
+      Math.max(4, winW - popupMaxW - 8)
     ) + "px";
     const wasHidden = this.el.style.display === "none";
     if (wasHidden) {
-      this._positionAbove = coords.bottom + 360 + 8 > window.innerHeight;
+      this._positionAbove = coords.bottom + 360 + 8 > winH;
     }
-    const maxH = Math.min(360, window.innerHeight * 0.55);
+    const maxH = Math.min(360, winH * 0.55);
     this.el.style.maxHeight = maxH + "px";
     this.el.style.top = this._positionAbove ? Math.max(4, coords.top - maxH - 8) + "px" : coords.bottom + 4 + "px";
-    const clampTop = window.innerHeight - Math.min(this.el.offsetHeight || 100, maxH) - 16;
+    const clampTop = winH - Math.min(this.el.offsetHeight || 100, maxH) - 16;
     this.el.style.top = Math.min(parseFloat(this.el.style.top), Math.max(4, clampTop)) + "px";
-    this.el.style.display = "block";
-    this.render();
-    this.showDetail(0);
   }
   hide() {
     this.el.style.display = "none";
@@ -322,8 +351,14 @@ var Popup = class {
     this.items = [];
     if (!this.results.length) {
       const empty = document.createElement("div");
-      empty.style.cssText = "padding:12px 16px;color:var(--text-muted);font-size:13px;";
-      empty.textContent = "No matching notes";
+      empty.style.cssText = "display:flex;flex-direction:column;justify-content:center;gap:4px;min-height:88px;padding:14px 16px;color:var(--text-muted);font-size:13px;line-height:1.5;";
+      const line1 = document.createElement("div");
+      line1.textContent = t("noMatch");
+      const line2 = document.createElement("div");
+      line2.style.cssText = "font-size:12px;opacity:0.75;";
+      line2.textContent = t("indexInfo").replace("{n}", String(this.index.size));
+      empty.appendChild(line1);
+      empty.appendChild(line2);
       this.el.appendChild(empty);
       return;
     }
@@ -547,7 +582,7 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
           return;
         }
         if (this.dismissed) return;
-        const query = match[1], from = pos - query.length - 1;
+        const query = match[1], from = Math.max(0, pos - query.length - 1);
         if (!this.popup) {
           this.popup = new Popup(this.index, this.app);
         }
@@ -569,6 +604,9 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
     }, 100);
   }
   registerKb(view) {
+    const dom = view.dom;
+    if (dom.__atMentionKb) return;
+    dom.__atMentionKb = true;
     let composing = false;
     view.dom.addEventListener("compositionstart", () => {
       composing = true;
