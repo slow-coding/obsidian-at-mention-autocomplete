@@ -439,8 +439,13 @@ class Popup {
     if (left + detailW > window.innerWidth) left = Math.max(0, rect.left - detailW - 8);
     this.detailEl.style.left = left + "px";
     this.detailEl.style.top = rect.top + "px";
-    // Match popup height so they align
-    this.detailEl.style.height = rect.height + "px";
+    // Match popup height so they align — but never below a readable preview minimum.
+    // With a single hit the popup is ~64px tall, which made the rendered preview a
+    // four-line sliver (Darren 2026-08-26). Minimum mirrors the popup max height.
+    const winH = this.el.ownerDocument.defaultView!.innerHeight;
+    const wantH = Math.max(rect.height, Math.min(360, winH * 0.55));
+    this.detailEl.style.height = wantH + "px";
+    this.detailEl.style.top = Math.min(rect.top, Math.max(0, winH - wantH - 8)) + "px";
     this.detailEl.style.display = "block";
   }
 

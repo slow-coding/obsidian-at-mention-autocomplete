@@ -493,7 +493,10 @@ var Popup = class {
     if (left + detailW > window.innerWidth) left = Math.max(0, rect.left - detailW - 8);
     this.detailEl.style.left = left + "px";
     this.detailEl.style.top = rect.top + "px";
-    this.detailEl.style.height = rect.height + "px";
+    const winH = this.el.ownerDocument.defaultView.innerHeight;
+    const wantH = Math.max(rect.height, Math.min(360, winH * 0.55));
+    this.detailEl.style.height = wantH + "px";
+    this.detailEl.style.top = Math.min(rect.top, Math.max(0, winH - wantH - 8)) + "px";
     this.detailEl.style.display = "block";
   }
   highlightNodes(el, q) {
