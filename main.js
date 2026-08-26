@@ -572,6 +572,7 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
       this.registerEvent(this.app.workspace.on("editor-change", (editor) => {
         const view = editor.cm;
         if (!view) return;
+        if (!view.hasFocus) return;
         const pos = view.state.selection.main.head;
         const line = view.state.doc.lineAt(pos);
         const before = line.text.slice(0, pos - line.from);

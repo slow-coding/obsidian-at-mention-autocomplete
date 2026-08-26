@@ -507,6 +507,12 @@ export default class AtMentionPlugin extends Plugin {
         // window the user actually sees the editor in), and registerKb is idempotent
         // per view via a DOM marker so keyboard handlers are registered exactly once
         // even though multiple instances race on the same view.
+        // Only the focused view may drive the popup. Obsidian 1.13 syncs same-file
+        // edits across split/sidebar views — each sync emits editor-change, so a
+        // background view's event would either hide the popup (no @ on its line) or
+        // move it to the wrong pane (Darren 2026-08-26 #3: popup misplaced with a
+        // page in the sidebar). The view the user is actually typing in is focused.
+        if (!view.hasFocus) return;
         const pos = view.state.selection.main.head;
         const line = view.state.doc.lineAt(pos);
         const before = line.text.slice(0, pos - line.from);
