@@ -26,6 +26,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
+var import_language = require("@codemirror/language");
 function fuzzyMatch(title, query) {
   const lower = title.toLowerCase();
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -209,6 +210,18 @@ var SearchIndex = class {
   }
 };
 var AT_RE = /@([^\[\]()]*)$/u;
+var CODE_NAME_TOKENS = ["hmd-codeblock", "hmd-indented-code", "inline-code", "HyperMD-codeblock"];
+function inCode(view, pos) {
+  const state = view.state;
+  const at = Math.max(0, Math.min(pos, state.doc.length - 1));
+  let tree = (0, import_language.syntaxTree)(state);
+  if (tree.length < at + 1) tree = (0, import_language.ensureSyntaxTree)(state, at + 1, 50) ?? tree;
+  for (let n = tree.resolveInner(at, 1); n; n = n.parent) {
+    const name = n.name;
+    if (CODE_NAME_TOKENS.some((t2) => name.includes(t2))) return true;
+  }
+  return false;
+}
 var Popup = class {
   // sticky position to avoid flipping
   constructor(index, app) {
@@ -587,6 +600,11 @@ var AtMentionPlugin = class extends import_obsidian.Plugin {
         }
         if (this.dismissed) return;
         const query = match[1], from = Math.max(0, pos - query.length - 1);
+        if (inCode(view, from)) {
+          this.popup?.hide();
+          this.dismissed = false;
+          return;
+        }
         if (!this.popup) {
           this.popup = new Popup(this.index, this.app);
         }

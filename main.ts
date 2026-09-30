@@ -1,5 +1,7 @@
 import { Plugin, TFile, Vault, MarkdownRenderer, Component, setIcon } from "obsidian";
 import { EditorView } from "@codemirror/view";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import type { SyntaxNode } from "@lezer/common";
 
 interface SearchEntry { title: string; path: string; content: string; ctime: number; mtime: number; }
 type MatchType = "title" | "content";
@@ -156,6 +158,44 @@ export class SearchIndex {
 }
 
 const AT_RE = /@([^\[\]()]*)$/u;
+
+// Node-name fragments that mean "this position is code, not prose". Obsidian does
+// not use @lezer/markdown's names (FencedCode / InlineCode) — its parser names
+// nodes after their CSS classes, and a code block that contains another language
+// is `hmd-codeblock_<inner>` (measured, Obsidian 1.13.7, in its live syntax tree):
+//   fence line and info string  formatting_formatting-code-block_hmd-codeblock
+//   line inside ``` / ~~~      hmd-codeblock_variable
+//   empty line inside ```      HyperMD-codeblock_HyperMD-codeblock-bg
+//   4-space indented block     hmd-indented-code_inline-code
+//   `inline code` in a line    inline-code
+// So match on the fragment, not on the whole name — the outer language is the
+// prefix, and the inner one is appended after it.
+const CODE_NAME_TOKENS = ["hmd-codeblock", "hmd-indented-code", "inline-code", "HyperMD-codeblock"];
+
+/**
+ * Is the character at `pos` inside a code block or inline code?
+ * Issue #1: typing `@app` inside ``` still popped the suggestion list.
+ *
+ * resolveInner is asked for the node on the right side of the boundary (side 1)
+ * because that is the char the caret sits on. Measured on Obsidian 1.13.7: with
+ * side -1 the newline right after a closing fence and the space right after
+ * `inline code` resolve to the code node that ends there, so typing `@` in the
+ * paragraph below a fence would be swallowed as code. Side 1 asks for the node
+ * that starts there instead, which is the text the caret is about to extend.
+ * The tree can be a partial parse (long notes, viewport-only region); when it
+ * does not reach the caret, force the parse up to there before deciding.
+ */
+function inCode(view: EditorView, pos: number): boolean {
+  const state = view.state;
+  const at = Math.max(0, Math.min(pos, state.doc.length - 1));
+  let tree = syntaxTree(state);
+  if (tree.length < at + 1) tree = ensureSyntaxTree(state, at + 1, 50) ?? tree;
+  for (let n: SyntaxNode | null = tree.resolveInner(at, 1); n; n = n.parent) {
+    const name: string = n.name;
+    if (CODE_NAME_TOKENS.some(t => name.includes(t))) return true;
+  }
+  return false;
+}
 
 // ===== Popup =====
 
@@ -526,6 +566,9 @@ export default class AtMentionPlugin extends Plugin {
         // Don't re-show if user explicitly dismissed this @ session
         if (this.dismissed) return;
         const query = match[1], from = Math.max(0, pos - query.length - 1);
+        // Inside ``` / `inline code` the @ is plain text (imports, decorators, emails)
+        // and a link popup would be in the way (issue #1).
+        if (inCode(view, from)) { this.popup?.hide(); this.dismissed = false; return; }
         if (!this.popup) { this.popup = new Popup(this.index, this.app); }
       // Register keyboard only once per view
       if (this.kbView !== view) {
